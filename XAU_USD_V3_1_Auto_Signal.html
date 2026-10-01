@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>XAU/USD V3.1 Auto Signal</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4"></script>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3.5.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1"></script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#e8edf7;font-family:Arial,sans-serif}
+.wrap{max-width:1200px;margin:auto;padding:18px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+h1{font-size:22px;margin:0}.muted{color:#8f9bb3;font-size:13px}
+.panel{background:#121a2d;border:1px solid #26324c;border-radius:14px;padding:15px;margin-top:14px}
+.controls{display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:9px}
+input,select,button{width:100%;padding:10px;border-radius:9px;border:1px solid #34415d;background:#0d1425;color:#fff}
+button{cursor:pointer;background:#1d6ef2;border:0;font-weight:700}button:hover{opacity:.9}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+.card{background:#121a2d;border:1px solid #26324c;border-radius:14px;padding:15px}.label{font-size:12px;color:#8f9bb3}.value{font-size:20px;font-weight:800;margin-top:5px}
+.signal{text-align:center;border-radius:14px;padding:18px;font-size:30px;font-weight:900;margin-top:14px}
+.buy{background:#0c3928;color:#36e6a0}.sell{background:#481d25;color:#ff6678}.wait{background:#443916;color:#ffd34d}
+.metrics{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px}.metric{padding:10px;background:#0d1425;border-radius:9px;text-align:center}
+.metric b{display:block;font-size:16px;margin-top:4px}.chartbox{height:500px}.log{max-height:180px;overflow:auto;font-size:12px;line-height:1.7}
+.good{color:#36e6a0}.bad{color:#ff6678}.warn{color:#ffd34d}
+@media(max-width:850px){.controls{grid-template-columns:1fr 1fr}.grid{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(3,1fr)}.chartbox{height:420px}}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+  <div><h1>🟡 XAU/USD V3.1 Auto Signal</h1><div class="muted">EMA 9/21 • RSI 14 • ATR 14 • Supertrend-style • 15m + 1H confirmation</div></div>
+  <div id="status" class="muted">Ready</div>
+</div>
+
+<div class="panel">
+<div class="controls">
+  <input id="apiKey" type="password" placeholder="Twelve Data API Key">
+  <select id="interval"><option>1min</option><option>5min</option><option selected>15min</option><option>1h</option><option>4h</option></select>
+  <select id="refresh"><option value="0">Manual</option><option value="30000">30 sec</option><option value="60000" selected>1 min</option><option value="300000">5 min</option></select>
+  <select id="bars"><option value="100">100 bars</option><option value="200" selected>200 bars</option><option value="300">300 bars</option></select>
+  <button id="run">▶ UPDATE</button>
+</div>
+<div class="muted" style="margin-top:9px">API key is used only in this browser. For public deployment, move the API request to your own backend.</div>
+</div>
+
+<div id="signal" class="signal wait">🟡 WAIT</div>
+
+<div class="grid">
+ <div class="card"><div class="label">ENTRY</div><div id="entry" class="value">—</div></div>
+ <div class="card"><div class="label">STOP LOSS</div><div id="sl" class="value">—</div></div>
+ <div class="card"><div class="label">TP1</div><div id="tp1" class="value">—</div></div>
+ <div class="card"><div class="label">TP2</div><div id="tp2" class="value">—</div></div>
+ <div class="card"><div class="label">TP3</div><div id="tp3" class="value">—</div></div>
+ <div class="card"><div class="label">SIGNAL STRENGTH</div><div id="strength" class="value">—</div></div>
+</div>
+
+<div class="panel">
+<div class="metrics">
+ <div class="metric"><span class="label">PRICE</span><b id="price">—</b></div>
+ <div class="metric"><span class="label">EMA 9</span><b id="ema9">—</b></div>
+ <div class="metric"><span class="label">EMA 21</span><b id="ema21">—</b></div>
+ <div class="metric"><span class="label">RSI 14</span><b id="rsi">—</b></div>
+ <div class="metric"><span class="label">ATR 14</span><b id="atr">—</b></div>
+ <div class="metric"><span class="label">15M / 1H</span><b id="confirm">—</b></div>
+</div>
+</div>
+
+<div class="panel"><div class="chartbox"><canvas id="chart"></canvas></div></div>
+
+<div class="panel">
+<b>🔊 Alert</b>
+<div style="display:flex;gap:9px;margin-top:10px">
+<button id="soundBtn">Enable Sound</button><button id="testBtn">Test Alert</button>
+</div>
+<div id="log" class="log" style="margin-top:10px"></div>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let chart=null, timer=null, audioCtx=null, lastSignal="WAIT", lastBarTime=null;
+
+function log(s,cls=""){const d=document.createElement("div");d.className=cls;d.textContent=new Date().toLocaleTimeString()+" — "+s;$("log").prepend(d)}
+function fmt(n){return Number.isFinite(n)?n.toFixed(2):"—"}
+function ema(a,p){let k=2/(p+1),e=a[0];return a.map((v,i)=>i?e=(v*k+e*(1-k)):e)}
+function rsi(a,p=14){let out=Array(a.length).fill(null),g=0,l=0;for(let i=1;i<a.length;i++){let d=a[i]-a[i-1],up=Math.max(d,0),dn=Math.max(-d,0);if(i<=p){g+=up;l+=dn;if(i===p){g/=p;l/=p;out[i]=l?100-100/(1+g/l):100}}else{g=(g*(p-1)+up)/p;l=(l*(p-1)+dn)/p;out[i]=l?100-100/(1+g/l):100}}return out}
+function atr(b,p=14){let tr=b.map((x,i)=>i?Math.max(x.high-x.low,Math.abs(x.high-b[i-1].close),Math.abs(x.low-b[i-1].close)):x.high-x.low);let out=Array(b.length).fill(null),v=0;for(let i=0;i<tr.length;i++){if(i<p){v+=tr[i];if(i===p-1)out[i]=v/p}else{v=(v*(p-1)+tr[i])/p;out[i]=v}}return out}
+function calcSignal(b){
+ const c=b.map(x=>x.close), e9=ema(c,9),e21=ema(c,21),R=rsi(c),A=atr(b),i=b.length-1;
+ let score=0;
+ if(c[i]>e9[i])score++; else score--;
+ if(e9[i]>e21[i])score++; else score--;
+ if(R[i]>=52)score++; else if(R[i]<=48)score--;
+ if(c[i]>c[i-1])score++; else score--;
+ let sig=score>=3?"BUY":score<=-3?"SELL":"WAIT";
+ return {sig,score,c:c[i],e9:e9[i],e21:e21[i],rsi:R[i],atr:A[i],E9:e9,E21:e21,R,A}
+}
+async function getData(interval,outputsize){
+ const key=$("apiKey").value.trim(); if(!key)throw Error("Enter your Twelve Data API key.");
+ const url=`https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=${encodeURIComponent(interval)}&outputsize=${outputsize}&apikey=${encodeURIComponent(key)}`;
+ const r=await fetch(url); const j=await r.json(); if(j.status==="error"||!j.values)throw Error(j.message||"API error");
+ return j.values.reverse().map(x=>({time:new Date(x.datetime).getTime(),open:+x.open,high:+x.high,low:+x.low,close:+x.close}));
+}
+function makeChart(b,ind,signals=[]){
+ const ctx=$("chart").getContext("2d"); if(chart)chart.destroy();
+ const labels=b.map(x=>x.time);
+ const ds=[{label:"Close",data:b.map(x=>x.close),borderWidth:1.5,pointRadius:0,tension:.15},
+ {label:"EMA 9",data:ind.E9,borderWidth:1.5,pointRadius:0},
+ {label:"EMA 21",data:ind.E21,borderWidth:1.5,pointRadius:0},
+ {label:"BUY",data:b.map((x,i)=>signals[i]==="BUY"?x.low-ind.A[i]*.25:null),showLine:false,pointRadius:6,pointStyle:"triangle"},
+ {label:"SELL",data:b.map((x,i)=>signals[i]==="SELL"?x.high+ind.A[i]*.25:null),showLine:false,pointRadius:6,pointStyle:"triangle",rotation:180}];
+ chart=new Chart(ctx,{type:"line",data:{labels,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:"index",intersect:false},plugins:{legend:{labels:{color:"#dbe4f5"}}},scales:{x:{type:"time",ticks:{color:"#8f9bb3"}},y:{ticks:{color:"#8f9bb3"}}}}});
+}
+async function update(){
+ try{
+  $("status").textContent="Loading…";
+  const n=+$("bars").value, interval=$("interval").value;
+  const b=await getData(interval,n), ind=calcSignal(b);
+  const b15=interval==="15min"?b:await getData("15min",120);
+  const h1=await getData("1h",120);
+  const s15=calcSignal(b15).sig, s1h=calcSignal(h1).sig;
+  let final=ind.sig;
+  if(ind.sig==="BUY" && !(s15==="BUY"&&s1h==="BUY")) final="WAIT";
+  if(ind.sig==="SELL" && !(s15==="SELL"&&s1h==="SELL")) final="WAIT";
+  const price=ind.c, a=ind.atr||price*.001;
+  let entry=price,sl=price,tp1=price,tp2=price,tp3=price;
+  if(final==="BUY"){sl=price-a*1.5;tp1=price+a*1.0;tp2=price+a*2.0;tp3=price+a*3.0}
+  if(final==="SELL"){sl=price+a*1.5;tp1=price-a*1.0;tp2=price-a*2.0;tp3=price-a*3.0}
+  $("signal").className="signal "+(final==="BUY"?"buy":final==="SELL"?"sell":"wait");
+  $("signal").textContent=final==="BUY"?"🟢 BUY":final==="SELL"?"🔴 SELL":"🟡 WAIT";
+  $("entry").textContent=fmt(entry);$("sl").textContent=fmt(sl);$("tp1").textContent=fmt(tp1);$("tp2").textContent=fmt(tp2);$("tp3").textContent=fmt(tp3);
+  $("strength").textContent=Math.round(Math.abs(ind.score)/4*100)+"%";
+  $("price").textContent=fmt(price);$("ema9").textContent=fmt(ind.e9);$("ema21").textContent=fmt(ind.e21);$("rsi").textContent=fmt(ind.rsi);$("atr").textContent=fmt(ind.atr);
+  $("confirm").textContent=s15+" / "+s1h;
+  const signals=Array(b.length).fill(null);
+  for(let i=30;i<b.length;i++){const x=calcSignal(b.slice(0,i+1));if(x.sig==="BUY"||x.sig==="SELL")signals[i]=x.sig}
+  makeChart(b,ind,signals);
+  const currentBar=b[b.length-1].time;
+  if((final==="BUY"||final==="SELL") && (final!==lastSignal || currentBar!==lastBarTime)){alertSound(final);log("New "+final+" signal • "+fmt(price),final==="BUY"?"good":"bad")}
+  lastSignal=final;lastBarTime=currentBar;$("status").textContent="Updated "+new Date().toLocaleTimeString();
+ }catch(e){$("status").textContent="Error";log(e.message,"bad")}
+}
+function alertSound(type){
+ if(!audioCtx)return;
+ const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.connect(g);g.connect(audioCtx.destination);
+ o.frequency.value=type==="BUY"?880:440;g.gain.value=.08;o.start();
+ setTimeout(()=>o.frequency.value=type==="BUY"?1175:330,180);setTimeout(()=>{o.stop();g.disconnect()},380);
+}
+$("soundBtn").onclick=()=>{audioCtx=new (window.AudioContext||window.webkitAudioContext)();$("soundBtn").textContent="🔊 Sound Enabled";alertSound("BUY")};
+$("testBtn").onclick=()=>{if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();alertSound("BUY");log("Test alert played")}
+$("run").onclick=update;
+$("refresh").onchange=()=>{clearInterval(timer);let v=+$("refresh").value;if(v)timer=setInterval(update,v)};
+$("refresh").dispatchEvent(new Event("change"));
+log("V3.1 ready. Enter Twelve Data API key and press UPDATE.","warn");
+</script>
+</body>
+</html>
